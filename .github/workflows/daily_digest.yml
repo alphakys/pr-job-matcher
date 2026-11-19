@@ -1,0 +1,48 @@
+name: Daily PR-to-Job Matcher Digest
+
+on:
+  schedule:
+    # Run daily at 00:00 UTC (09:00 KST)
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run pipeline in dry-run fixture mode without external webhooks"
+        required: false
+        default: "false"
+        type: boolean
+
+jobs:
+  verify-and-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python and sync dependencies
+        run: uv sync --extra dev
+
+      - name: Lint with Ruff
+        run: uv run ruff check .
+
+      - name: Run unit and integration tests
+        run: uv run pytest -v
+
+      - name: Execute matching & digest pipeline
+        env:
+          DATABASE_URL: ${{ vars.DATABASE_URL || 'sqlite:///pr_job_matcher.db' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOS: ${{ vars.GITHUB_REPOS || '' }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ] || [ -z "$SLACK_WEBHOOK_URL" ]; then
+            uv run pr-job-matcher run --dry-run
+          else
+            uv run pr-job-matcher run
+          fi
